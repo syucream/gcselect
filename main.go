@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"log"
 
+	"golang.org/x/oauth2/google"
+
 	"cloud.google.com/go/bigquery"
 	"google.golang.org/api/iterator"
 )
@@ -24,6 +26,15 @@ var (
 		string(bigquery.ORC):     bigquery.ORC,
 	}
 )
+
+func resolveProjectId(ctx context.Context) (string, error) {
+	cred, err := google.FindDefaultCredentials(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	return cred.ProjectID, nil
+}
 
 func query(ctx context.Context, projectId, query string, exdata bigquery.ExternalData) ([]map[string]bigquery.Value, error) {
 	client, err := bigquery.NewClient(ctx, projectId)
@@ -65,8 +76,8 @@ func query(ctx context.Context, projectId, query string, exdata bigquery.Externa
 }
 
 func main() {
-	projectId := flag.String("projectId", "'", "GCP project id")
-	sourceFormat := flag.String("sourceFormat", string(bigquery.Avro), "source format of gcs objects")
+	projectId := flag.String("projectId", "", "GCP project id, default is credential provided")
+	sourceFormat := flag.String("sourceFormat", string(bigquery.Avro), "source format of gcs objects, default is AVRO")
 
 	flag.Parse()
 
@@ -74,7 +85,7 @@ func main() {
 	numArgs := len(args)
 
 	if numArgs < 2 {
-		log.Fatalf("no required arguments")
+		log.Fatalf("no required arguments, numArgs was %d", numArgs)
 	}
 
 	sf, sfOk := toSourceFormat[*sourceFormat]
@@ -84,12 +95,21 @@ func main() {
 
 	conf := &bigquery.ExternalDataConfig{
 		SourceFormat: sf,
-		SourceURIs:   []string{args[0]},
+		SourceURIs:   args[0 : numArgs-1],
 	}
 
 	ctx := context.Background()
 
-	rows, err := query(ctx, *projectId, args[numArgs-1], conf)
+	bqProjectId := *projectId
+	if bqProjectId == "" {
+		id, err := resolveProjectId(ctx)
+		if err != nil {
+			log.Fatalf("failed to fetch project id from default credentials: %v", err)
+		}
+		bqProjectId = id
+	}
+
+	rows, err := query(ctx, bqProjectId, args[numArgs-1], conf)
 	if err != nil {
 		log.Fatal(err)
 	}
